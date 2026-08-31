@@ -1,5 +1,6 @@
 import heapq
 import math
+import random
 from collections import deque
 
 edges = [
@@ -120,6 +121,51 @@ def dfs(graph, start, goal):
     return float("inf"), [], nodes_expanded
 
 
+def ant_colony_optimization(graph, start, goal,
+                            num_ants=20, num_iterations=100,
+                            decay=0.5, alpha=1, beta=2, Q=100):
+    pheromones = {(u, v): 1.0 for u in graph for v in graph[u]}
+    best_cost = float('inf')
+    best_path = []
+
+    for _ in range(num_iterations):
+        iteration_paths = []
+        for _ in range(num_ants):
+            path = [start]
+            visited = {start}
+            cost = 0
+            stuck = False
+            while path[-1] != goal:
+                current = path[-1]
+                neighbors = [n for n in graph[current] if n not in visited]
+                if not neighbors:
+                    stuck = True
+                    break
+                scores = [
+                    (pheromones.get((current, n), 1.0) ** alpha) * ((1.0 / graph[current][n]) ** beta)
+                    for n in neighbors
+                ]
+                total = sum(scores)
+                probs = [s / total for s in scores]
+                next_node = random.choices(neighbors, weights=probs)[0]
+                cost += graph[current][next_node]
+                path.append(next_node)
+                visited.add(next_node)
+            if not stuck and path[-1] == goal:
+                iteration_paths.append((cost, path))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_path = path[:]
+        for key in pheromones:
+            pheromones[key] *= (1 - decay)
+        for cost, path in iteration_paths:
+            for i in range(len(path) - 1):
+                pheromones[(path[i], path[i+1])] += Q / cost
+                pheromones[(path[i+1], path[i])] += Q / cost
+
+    return best_cost, best_path
+
+
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
@@ -132,6 +178,12 @@ for name, fn in [('Dijkstra', dijkstra), ('UCS', uniform_cost_search),
     cost, path, expanded = fn(graph_dict, start_node, goal_node)
     results[name] = (cost, path, expanded)
     print(f"{name:10s} cost={cost:6.1f}  hops={len(path)-1}  expanded={expanded:2d}  path={' -> '.join(path)}")
+
+# ACO is stochastic — run with a fixed seed for the display, then verify over multiple seeds
+random.seed(42)
+aco_cost, aco_path = ant_colony_optimization(graph_dict, start_node, goal_node)
+results['ACO'] = (aco_cost, aco_path, None)
+print(f"{'ACO':10s} cost={aco_cost:6.1f}  hops={len(aco_path)-1}  expanded=N/A  path={' -> '.join(aco_path)}")
 
 print()
 print("=== Checks ===")
@@ -167,6 +219,24 @@ dfs_uses_stack_pop = '.pop()' in inspect.getsource(dfs) and 'popleft' not in ins
 assert bfs_uses_deque, "BFS should use a FIFO deque"
 assert dfs_uses_stack_pop, "DFS should use LIFO stack (.pop(), not .popleft())"
 print("PASS: BFS uses FIFO queue (deque), DFS uses LIFO stack -- genuinely different traversal orders")
+
+# 7. ACO: path must be valid (starts at start, ends at goal, all edges exist)
+assert aco_path[0] == start_node and aco_path[-1] == goal_node, "ACO path must go from start to goal"
+for i in range(len(aco_path) - 1):
+    u, v = aco_path[i], aco_path[i+1]
+    assert v in graph_dict.get(u, {}), f"ACO path contains non-existent edge {u}->{v}"
+print(f"PASS: ACO returned a valid path from {start_node} to {goal_node}")
+
+# 8. ACO: converges to optimal cost across multiple seeds (stochastic, but reliable on this small graph)
+aco_costs = []
+for seed in range(10):
+    random.seed(seed)
+    c, _ = ant_colony_optimization(graph_dict, start_node, goal_node)
+    aco_costs.append(c)
+optimal_cost = results['Dijkstra'][0]
+assert all(c == optimal_cost for c in aco_costs), \
+    f"ACO should converge to optimal cost {optimal_cost} across seeds, got: {aco_costs}"
+print(f"PASS: ACO converges to optimal cost {optimal_cost} across 10 different random seeds")
 
 print()
 print("ALL CHECKS PASSED")
